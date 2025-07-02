@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Local PDF Splitter</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      margin: 2rem;
+      max-width: 720px;
+    }
+    h1 {
+      font-size: 1.75rem;
+      margin-bottom: 1rem;
+    }
+    label {
+      display: block;
+      margin: 0.5rem 0;
+    }
+    input[type="file"],
+    input[type="text"],
+    button {
+      font-size: 1rem;
+      padding: 0.5rem;
+    }
+    button {
+      margin-top: 1rem;
+      cursor: pointer;
+    }
+    #downloads a {
+      display: block;
+      margin: 0.25rem 0;
+    }
+  </style>
+  <!-- Download pdf-lib.min.js once for full offline use and change the src to a local file if desired -->
+  <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+</head>
+<body>
+  <h1>Local PDF Splitter</h1>
+
+  <label>
+    Select a PDF to split:
+    <input type="file" id="pdf" accept="application/pdf" />
+  </label>
+  <label>
+    Pages / ranges to extract (e.g. <code>1,3,5-7</code>). A range like <code>5-7</code> is saved as <em>one</em> PDF containing pages&nbsp;5‑7. Leave blank to create one file per page.
+    <input type="text" id="pages" placeholder="1,3,5-7" />
+  </label>
+  <button id="split">Split PDF</button>
+
+  <h2 id="status"></h2>
+  <div id="downloads"></div>
+
+  <script>
+    /**
+     * Parse a comma‑separated list of page numbers / ranges.
+     * Returns an array of arrays, where each inner array represents the pages for one output file (1‑based).
+     * "" → [[1],[2],...]
+     * "1,3,5-7" → [[1],[3],[5,6,7]]
+     */
+    function parseGroups(rangeStr, totalPages) {
+      if (!rangeStr.trim()) {
+        // Default: split into single‑page PDFs
+        return Array.from({ length: totalPages }, (_, i) => [i + 1]);
+      }
+
+      const groups = [];
+      for (const raw of rangeStr.split(',')) {
+        const part = raw.trim();
+        if (!part) continue;
+
+        if (part.includes('-')) {
+          const [startStr, endStr] = part.split('-');
+          const start = parseInt(startStr, 10);
+          const end = parseInt(endStr, 10);
+          if (Number.isNaN(start) || Number.isNaN(end) || start < 1 || end > totalPages || start > end) {
+            // invalid range -> skip
+            continue;
+          }
+          const pages = [];
+          for (let p = start; p <= end; p++) pages.push(p);
+          groups.push(pages);
+        } else {
+          const pageNum = parseInt(part, 10);
+          if (!Number.isNaN(pageNum) && pageNum >= 1 && pageNum <= totalPages) {
+            groups.push([pageNum]);
+          }
+        }
+      }
+      return groups;
+    }
+
+    document.getElementById('split').addEventListener('click', async () => {
+      const fileEl = document.getElementById('pdf');
+      const statusEl = document.getElementById('status');
+      const downloads = document.getElementById('downloads');
+      downloads.innerHTML = '';
+      statusEl.textContent = '';
+
+      if (!fileEl.files.length) {
+        alert('Please choose a PDF first.');
+        return;
+      }
+
+      const file = fileEl.files[0];
+      statusEl.textContent = 'Loading…';
+
+      try {
+        const bytes = await file.arrayBuffer();
+        const srcDoc = await PDFLib.PDFDocument.load(bytes);
+        const totalPages = srcDoc.getPageCount();
+
+        const groups = parseGroups(document.getElementById('pages').value, totalPages);
+        if (groups.length === 0) {
+          alert('No valid pages selected.');
+          statusEl.textContent = '';
+          return;
+        }
+
+        statusEl.textContent = `Creating ${groups.length} file(s)…`;
+
+        let counter = 1;
+        for (const pages of groups) {
+          const newDoc = await PDFLib.PDFDocument.create();
+          const copied = await newDoc.copyPages(srcDoc, pages.map(p => p - 1));
+          for (const pg of copied) newDoc.addPage(pg);
+
+          const pdfBytes = await newDoc.save();
+          const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+
+          if (pages.length === 1) {
+            link.download = `page-${pages[0]}.pdf`;
+            link.textContent = `Download page ${pages[0]}`;
+          } else {
+            link.download = `pages-${pages[0]}-${pages[pages.length - 1]}.pdf`;
+            link.textContent = `Download pages ${pages[0]}-${pages[pages.length - 1]}`;
+          }
+
+          downloads.appendChild(link);
+          counter++;
+        }
+
+        statusEl.textContent = 'Done!';
+      } catch (err) {
+        console.error(err);
+        alert('An error occurred while processing the PDF. See console for details.');
+        statusEl.textContent = '';
+      }
+    });
+  </script>
+</body>
+</html>
